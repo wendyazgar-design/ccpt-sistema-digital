@@ -1,34 +1,12 @@
 import express from 'express';
-import { pool } from '../db.js';
+import { pool, audit } from '../db.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
-
 const router = express.Router();
-
-router.get('/', authMiddleware, requireRole('admin'), async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT u.id, u.name, u.email, u.role, COUNT(e.id) AS expedientes
-      FROM users u
-      LEFT JOIN expedientes e ON e.user_id = u.id
-      GROUP BY u.id, u.name, u.email, u.role
-      ORDER BY u.id ASC
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al listar usuarios', details: error.message });
-  }
-});
-
-router.get('/me', authMiddleware, async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, name, email, role FROM users WHERE id = $1', [req.user.id]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Usuario no encontrado' });
-    }
-    res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al consultar usuario', details: error.message });
-  }
-});
-
+const allowed = ['tramite','nombre','curp','rfc','fecha_nacimiento','domicilio','municipio','estado','telefono','correo','profesion','universidad','cedula','fecha_titulacion','postgrado','fecha_registro_colegio','experiencia','numero_colegiado','periodo','observaciones'];
+function owner(req, id) { return req.user.role === 'admin' || Number(id) === Number(req.user.id); }
+router.get('/', authMiddleware, async (req,res) => { const q=req.user.role==='admin' ? 'SELECT e.*,u.name AS propietario FROM expedientes e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC' : 'SELECT e.*,u.name AS propietario FROM expedientes e JOIN users u ON u.id=e.user_id WHERE e.user_id=$1 ORDER BY e.created_at DESC'; const r=await pool.query(q,req.user.role==='admin'?[]:[req.user.id]); res.json(r.rows); });
+router.post('/', authMiddleware, async (req,res) => { const body=req.body; if(!body.tramite || !body.nombre)return res.status(400).json({message:'Trámite y nombre son obligatorios'}); const userId=req.user.role==='admin' && body.user_id ? Number(body.user_id) : req.user.id; const folio=`CCPT-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`; const vals=[userId,folio,...allowed.map(k=>body[k] ?? null)]; const r=await pool.query(`INSERT INTO expedientes (user_id,folio,${allowed.join(',')}) VALUES ($1,$2,${allowed.map((_,i)=>`$${i+3}`).join(',')}) RETURNING *`,vals); await audit(req.user.id,'CREATE','expediente',r.rows[0].id,req.ip); res.status(201).json(r.rows[0]); });
+router.get('/:id', authMiddleware, async (req,res) => { const r=await pool.query('SELECT e.*,u.name AS propietario FROM expedientes e JOIN users u ON u.id=e.user_id WHERE e.id=$1',[req.params.id]); if(!r.rowCount)return res.status(404).json({message:'Expediente no encontrado'}); if(!owner(req,r.rows[0].user_id))return res.status(403).json({message:'No puedes consultar este expediente'}); res.json(r.rows[0]); });
+router.put('/:id', authMiddleware, async (req,res) => { const found=await pool.query('SELECT * FROM expedientes WHERE id=$1',[req.params.id]); if(!found.rowCount)return res.status(404).json({message:'Expediente no encontrado'}); if(!owner(req,found.rows[0].user_id))return res.status(403).json({message:'No puedes editar este expediente'}); const keys=allowed.filter(k=>req.body[k]!==undefined); if(req.user.role==='admin' && req.body.estatus!==undefined)keys.push('estatus'); if(!keys.length)return res.status(400).json({message:'No hay campos para actualizar'}); const values=keys.map(k=>req.body[k]); values.push(req.params.id); const r=await pool.query(`UPDATE expedientes SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},updated_at=NOW() WHERE id=$${values.length} RETURNING *`,values); await audit(req.user.id,'UPDATE','expediente',req.params.id,req.ip); res.json(r.rows[0]); });
+router.delete('/:id', authMiddleware, requireRole('admin'), async (req,res) => { const r=await pool.query('DELETE FROM expedientes WHERE id=$1 RETURNING id',[req.params.id]); if(!r.rowCount)return res.status(404).json({message:'Expediente no encontrado'}); await audit(req.user.id,'DELETE','expediente',req.params.id,req.ip); res.json({message:'Expediente eliminado'}); });
 export default router;

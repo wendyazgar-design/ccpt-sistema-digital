@@ -1,0 +1,150 @@
+import { useEffect, useState } from 'react';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+
+function App() {
+  const [token, setToken] = useState(localStorage.getItem('ccpt-token') || '');
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem('ccpt-user') || 'null'));
+  const [view, setView] = useState('login');
+  const [form, setForm] = useState({ email: 'admin@ccpt.local', password: 'Admin123!' });
+  const [expedientes, setExpedientes] = useState([]);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (token && user) {
+      fetchExpedientes();
+      setView('dashboard');
+    }
+  }, [token, user]);
+
+  async function fetchExpedientes() {
+    try {
+      const res = await fetch(`${API_URL}/expedientes`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setExpedientes(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setMessage('');
+
+    try {
+      const res = await fetch(`${API_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Error de inicio de sesión');
+      }
+
+      localStorage.setItem('ccpt-token', data.token);
+      localStorage.setItem('ccpt-user', JSON.stringify(data.user));
+      setToken(data.token);
+      setUser(data.user);
+      setMessage('Sesión iniciada correctamente');
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('ccpt-token');
+    localStorage.removeItem('ccpt-user');
+    setToken('');
+    setUser(null);
+    setExpedientes([]);
+    setView('login');
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <h1>CCPT | Expediente Digital</h1>
+          <p>Sistema de registro y expediente institucional</p>
+        </div>
+        {user && (
+          <div className="user-box">
+            <span>{user.name}</span>
+            <strong>{user.role}</strong>
+            <button onClick={handleLogout}>Cerrar sesión</button>
+          </div>
+        )}
+      </header>
+
+      {!user ? (
+        <main className="login-box">
+          <form onSubmit={handleLogin}>
+            <h2>Iniciar sesión</h2>
+            <label>
+              Correo
+              <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            </label>
+            <label>
+              Contraseña
+              <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            </label>
+            <button type="submit">Entrar</button>
+            {message && <div className="message">{message}</div>}
+          </form>
+        </main>
+      ) : (
+        <main className="dashboard">
+          <section className="panel">
+            <h2>Resumen</h2>
+            <div className="stats">
+              <div className="stat-card">
+                <span>Expedientes</span>
+                <strong>{expedientes.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span>Rol</span>
+                <strong>{user.role}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Expedientes</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Folio</th>
+                  <th>Nombre</th>
+                  <th>Trámite</th>
+                  <th>Estatus</th>
+                </tr>
+              </thead>
+              <tbody>
+                {expedientes.length ? (
+                  expedientes.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.folio}</td>
+                      <td>{item.nombre}</td>
+                      <td>{item.tramite}</td>
+                      <td>{item.estatus}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="4">Sin expedientes registrados.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </main>
+      )}
+    </div>
+  );
+}
+
+export default App;
